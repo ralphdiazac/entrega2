@@ -71,22 +71,26 @@ def crear_modelo() -> tuple[Provider, BaseChatModel]:
 proveedor, model = crear_modelo()
 
 # --------------------------------------------------------------------------- prompt
+FORMAT_INSTRUCTIONS = (
+    "- tecnologias: lista NO vacía, solo tecnologías mencionadas explícitamente; no inventes ninguna.\n"
+    "- nivel_de_criticidad: exactamente uno de: baja, media, alta.\n"
+    "- resumen_tecnico: una o dos frases, máximo 500 caracteres."
+)
+
+# Template modular: variables de entrada {texto} e {instrucciones_formato} (esta última con valor por defecto).
 prompt = ChatPromptTemplate.from_messages(
     [
         (
             "system",
             "Eres un analista técnico. Extrae información técnica de descripciones de arquitectura, "
             "incidentes y logs de error.\n"
-            "Reglas:\n"
-            "- tecnologias: lista NO vacía, solo tecnologías mencionadas explícitamente; no inventes ninguna.\n"
-            "- nivel_de_criticidad: exactamente uno de: baja, media, alta.\n"
-            "- resumen_tecnico: una o dos frases, máximo 500 caracteres.\n"
+            "Reglas de formato:\n{instrucciones_formato}\n"
             "Si el texto es ambiguo, elige la interpretación más conservadora y refleja la "
             "incertidumbre en el resumen; nunca inventes datos que no estén en el texto.",
         ),
         ("human", "Texto a analizar:\n\n{texto}"),
     ]
-)
+).partial(instrucciones_formato=FORMAT_INSTRUCTIONS)
 
 
 # --------------------------------------------------------------------------- cadena
