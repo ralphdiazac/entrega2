@@ -5,6 +5,8 @@ import os
 from enum import StrEnum
 from pathlib import Path
 
+import anthropic
+import openai
 from dotenv import load_dotenv
 from langchain_anthropic import ChatAnthropic
 from langchain_core.callbacks import BaseCallbackHandler
@@ -15,6 +17,7 @@ from langchain_core.runnables import Runnable
 from langchain_openai import ChatOpenAI
 from pydantic import ValidationError
 
+from errors import AuthError, ConfigError
 from schemas import EntidadesTecnicas
 
 logger = logging.getLogger("chain")
@@ -31,29 +34,41 @@ class Provider(StrEnum):
 
 # Modelo por defecto solo para Anthropic; con OpenAI hay que indicarlo en LLM_MODEL.
 MODELO_POR_DEFECTO = {Provider.ANTHROPIC: "claude-opus-5-5"}
+API_KEY_VAR = {Provider.OPENAI: "OPENAI_API_KEY", Provider.ANTHROPIC: "ANTHROPIC_API_KEY"}
+# Errores de los SDKs que significan "la API key no sirve" (401 / 403).
+AUTH_ERRORS = (
+    anthropic.AuthenticationError,
+    anthropic.PermissionDeniedError,
+    openai.AuthenticationError,
+    openai.PermissionDeniedError,
+)
 
 
-def crear_modelo() -> BaseChatModel:
-    """Elige ChatAnthropic o ChatOpenAI según LLM_PROVIDER / LLM_MODEL. Las API keys las leen los SDKs."""
+def crear_modelo() -> tuple[Provider, BaseChatModel]:
+    """Elige ChatAnthropic o ChatOpenAI según LLM_PROVIDER / LLM_MODEL. Lanza ConfigError si falta algo."""
     load_dotenv(Path(__file__).with_name(".env"))  # ruta explícita: no depende del cwd
     valor = os.environ.get("LLM_PROVIDER", "anthropic").strip().lower()
     try:
         proveedor = Provider(valor)
     except ValueError:
         valid = ", ".join(p.value for p in Provider)
-        raise ValueError(f"Proveedor desconocido {valor!r}. Válidos: {valid}.") from None
+        raise ConfigError(f"Proveedor desconocido {valor!r}. Válidos: {valid}.") from None
 
     modelo = os.environ.get("LLM_MODEL") or MODELO_POR_DEFECTO.get(proveedor)
     if not modelo:
-        raise ValueError(f"Define LLM_MODEL para el proveedor {proveedor.value!r}.")
+        raise ConfigError(f"Define LLM_MODEL para el proveedor {proveedor.value!r}.")
+
+    var = API_KEY_VAR[proveedor]
+    if not os.environ.get(var, "").strip():
+        raise ConfigError(f"Falta la API key: define {var} en el .env o en el entorno (proveedor {proveedor.value!r}).")
 
     # Sin temperature/top_p: el SDK actual de Anthropic los elimina (igual que en el Módulo 1).
     if proveedor is Provider.ANTHROPIC:
-        return ChatAnthropic(model=modelo, max_tokens=MAX_TOKENS)
-    return ChatOpenAI(model=modelo, max_tokens=MAX_TOKENS)
+        return proveedor, ChatAnthropic(model=modelo, max_tokens=MAX_TOKENS)
+    return proveedor, ChatOpenAI(model=modelo, max_tokens=MAX_TOKENS)
 
 
-model = crear_modelo()
+proveedor, model = crear_modelo()
 
 # --------------------------------------------------------------------------- prompt
 prompt = ChatPromptTemplate.from_messages(
@@ -100,6 +115,8 @@ class LogHandler(BaseCallbackHandler):
 
     def on_chain_error(self, error, **kwargs):
         # el mismo error se propaga por varias runs anidadas: solo se registra una vez
+        if not isinstance(error, (OutputParserException, ValidationError)):
+            return  # no es un error reintentable (p. ej. API key rechazada): se maneja en process_text
         if any(error is visto for visto in self._errores_vistos):
             return
         self._errores_vistos.append(error)
@@ -111,6 +128,12 @@ class LogHandler(BaseCallbackHandler):
 
 async def process_text(text: str) -> EntidadesTecnicas:
     logger.info("Procesando texto (%d caracteres)", len(text))
-    resultado = await chain.ainvoke({"texto": text}, config={"callbacks": [LogHandler()]})
+    try:
+        resultado = await chain.ainvoke({"texto": text}, config={"callbacks": [LogHandler()]})
+    except AUTH_ERRORS as e:
+        var = API_KEY_VAR[proveedor]
+        raise AuthError(
+            f"{proveedor.value}: la API key fue rechazada (HTTP {e.status_code}). Revisa {var}."
+        ) from e
     logger.info("Validación OK: %d tecnologías, criticidad=%s", len(resultado.tecnologias), resultado.nivel_de_criticidad.value)
     return resultado

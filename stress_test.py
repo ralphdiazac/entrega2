@@ -11,8 +11,13 @@ import sys
 from langchain_core.exceptions import OutputParserException
 from langchain_core.runnables import RunnableLambda
 
-from chain import MAX_ATTEMPTS, LogHandler, con_reintentos, process_text, prompt
+from errors import ConfigError, PipelineError
 from schemas import EntidadesTecnicas
+
+try:
+    from chain import MAX_ATTEMPTS, LogHandler, con_reintentos, process_text, prompt
+except ConfigError as e:  # crear el cliente falló (proveedor, modelo o API key)
+    raise SystemExit(f"Error ({type(e).__name__}): {e}") from None
 
 
 # --------------------------------------------------------------------------- parte 1: offline
@@ -72,6 +77,8 @@ async def run_live():
         try:
             r = await process_text(texto)
             print(f"[{nombre}] OK -> {r.model_dump_json()}")
+        except PipelineError:
+            raise  # error de configuración/API key: no tiene sentido seguir con los demás textos
         except Exception as e:  # noqa: BLE001 - queremos ver cualquier fallo del pipeline
             print(f"[{nombre}] FALLÓ tras reintentos -> {type(e).__name__}")
 
@@ -81,4 +88,7 @@ if __name__ == "__main__":
     logging.getLogger("httpx").setLevel(logging.WARNING)
     run_offline()
     if "offline" not in sys.argv[1:]:
-        asyncio.run(run_live())
+        try:
+            asyncio.run(run_live())
+        except PipelineError as e:
+            raise SystemExit(f"Error ({type(e).__name__}): {e}") from None

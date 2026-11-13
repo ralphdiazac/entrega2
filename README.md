@@ -14,6 +14,7 @@ chain = (prompt | model.with_structured_output(EntidadesTecnicas)).with_retry(..
 |---|---|
 | `schemas.py` | Modelo Pydantic `EntidadesTecnicas` y el enum `NivelCriticidad`. |
 | `chain.py` | Cliente (`ChatAnthropic` / `ChatOpenAI`), `ChatPromptTemplate`, cadena LCEL, `.with_retry()`, logs y `process_text()` asíncrona. |
+| `errors.py` | Errores controlados (`ConfigError`, `AuthError`) que se muestran como mensaje claro, sin traceback. |
 | `main.py` | Mini-script que ejecuta un ejemplo contra el LLM real. |
 | `stress_test.py` | Prueba de estrés: reintentos con un LLM simulado y textos ambiguos contra el LLM real. |
 
@@ -99,6 +100,19 @@ ERROR   Intento 3/3 falló (ValidationError): ... Sin más reintentos.
 ```
 
 Una respuesta cortada por falta de tokens llega como JSON incompleto, falla la validación y entra en este mismo ciclo de reintentos.
+
+## Errores de configuración y API keys
+
+Los scripts terminan con un mensaje claro y código de salida 1, sin traceback, cuando:
+
+| Situación | Salida |
+|---|---|
+| Falta la API key del proveedor (o está vacía) | `Error (ConfigError): Falta la API key: define ANTHROPIC_API_KEY en el .env o en el entorno (proveedor 'anthropic').` |
+| La API key existe pero el proveedor la rechaza (401/403) | `Error (AuthError): anthropic: la API key fue rechazada (HTTP 401). Revisa ANTHROPIC_API_KEY.` |
+| `LLM_PROVIDER` inválido | `Error (ConfigError): Proveedor desconocido 'gemini'. Válidos: openai, anthropic.` |
+| Falta `LLM_MODEL` con OpenAI | `Error (ConfigError): Define LLM_MODEL para el proveedor 'openai'.` |
+
+Si usas `process_text()` desde tu código, captura `PipelineError` (de `errors.py`) para manejar estos casos.
 
 ## Prueba de estrés
 
